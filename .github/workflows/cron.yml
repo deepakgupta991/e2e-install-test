@@ -1,0 +1,148 @@
+
+name: Scheduler
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: ""
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: cron
+  cancel-in-progress: true
+
+jobs:
+  decide_and_dispatch:
+    name: Dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          # ─── Look up the most recent fire of the load test ───────────────
+          last_json=$(gh api \
+            "repos/$REPO/actions/workflows/run.yml/runs?per_page=20&event=workflow_dispatch" \
+            --jq '.workflow_runs | sort_by(.run_started_at) | reverse | .[0] // {}')
+
+          LAST_ID=$(printf '%s' "$last_json" | jq -r '.id // ""')
+          LAST_TS=$(printf '%s' "$last_json" | jq -r '.run_started_at // ""')
+          export LAST_ID LAST_TS
+
+          # ─── Roll dice in Python (bash can't do float arithmetic) ────────
+          python3 - <<'PY' > /tmp/decision.env
+          import os, sys, random, datetime, hashlib
+
+          last_id = os.environ.get("LAST_ID", "").strip() or "bootstrap"
+          last_ts = os.environ.get("LAST_TS", "").strip()
+          now = datetime.datetime.now(datetime.timezone.utc)
+
+          if not last_ts:
+              elapsed = float("inf")
+          else:
+              t = datetime.datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+              elapsed = (now - t).total_seconds() / 60.0
+
+          seed = int(hashlib.sha256(last_id.encode()).hexdigest()[:12], 16)
+          target_gap = random.Random(seed).uniform(12.3, 179.12)
+          fire = elapsed >= target_gap
+
+          rng = random.SystemRandom()
+          installs = rng.randint(400, 1000)
+          concurrency = rng.randint(6, 10)
+          min_unique_ips = max(1, concurrency // 2)
+
+          elapsed_str = "inf" if elapsed == float("inf") else f"{elapsed:.2f}"
+          print(
+              f"# Last fire: id={last_id} started={last_ts or 'never'}",
+              file=sys.stderr,
+          )
+          print(
+              f"# Elapsed: {elapsed_str} min  |  Target gap: {target_gap:.2f} min  |  Fire: {fire}",
+              file=sys.stderr,
+          )
+          if fire:
+              print(
+                  f"# Per-fire: installs={installs} concurrency={concurrency} min_unique_ips={min_unique_ips}",
+                  file=sys.stderr,
+              )
+
+          print(f"FIRE={'true' if fire else 'false'}")
+          if fire:
+              print(f"INSTALLS={installs}")
+              print(f"CONCURRENCY={concurrency}")
+              print(f"MIN_UNIQUE_IPS={min_unique_ips}")
+          PY
+
+          set -a
+          source /tmp/decision.env
+          set +a
+
+          if [[ "${FIRE:-false}" != "true" ]]; then
+            echo "::notice title=S::skip"
+            exit 0
+          fi
+
+          if [[ "${DRY_RUN:-false}" == "true" ]]; then
+            echo "::notice title=S::dry i=$INSTALLS c=$CONCURRENCY"
+            exit 0
+          fi
+
+          echo "::notice title=S::fire i=$INSTALLS c=$CONCURRENCY"
+          gh workflow run run.yml \
+            --repo "$REPO" \
+            --ref "$REF" \
+            --field installs="$INSTALLS" \
+            --field concurrency="$CONCURRENCY" \
+            --field min_unique_ips="$MIN_UNIQUE_IPS" \
+            --field version="" \
+            --field include_freebsd=false
+
+          # ─── Install matrix: fire once per day alongside the load test ───
+          matrix_last_ts=$(gh api \
+            "repos/$REPO/actions/workflows/matrix.yml/runs?per_page=1&event=workflow_dispatch" \
+            --jq '.workflow_runs[0].run_started_at // ""' 2>/dev/null || echo "")
+
+          fire_matrix=false
+          if [[ -z "$matrix_last_ts" ]]; then
+            fire_matrix=true
+          else
+            matrix_elapsed=$(python3 -c "
+          import datetime
+          now = datetime.datetime.now(datetime.timezone.utc)
+          t = datetime.datetime.fromisoformat('${matrix_last_ts}'.replace('Z', '+00:00'))
+          print(f'{(now - t).total_seconds() / 3600:.2f}')
+          ")
+            if python3 -c "import sys; sys.exit(0 if float('${matrix_elapsed}') >= 23.0 else 1)"; then
+              fire_matrix=true
+            fi
+          fi
+
+          if [[ "$fire_matrix" == "true" ]]; then
+            echo "::notice title=S::matrix"
+            gh workflow run matrix.yml \
+              --repo "$REPO" \
+              --ref "$REF" \
+              --field level=smoke \
+              --field version="" \
+              --field os="ubuntu-latest,macos-latest,windows-latest" \
+              --field python="3.12,3.13" \
+              --field methods="pypi,wheel,sdist" \
+              --field installers="pip,uv" \
+              --field images="ubuntu:24.04,alpine:3.22" || \
+            echo "::warning title=S::matrix dispatch failed"
+          fi

@@ -1,0 +1,562 @@
+
+name: Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      installs:
+        description: ""
+        type: number
+        default: 10000
+      concurrency:
+        description: ""
+        type: number
+        default: 250
+      min_unique_ips:
+        description: ""
+        type: number
+        default: 250
+      version:
+        description: ""
+        type: string
+        default: ""
+      include_freebsd:
+        description: ""
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: run-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # =============================================================================
+  # =============================================================================
+  pre:
+    name: Setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix_main: ${{ steps.matrix.outputs.matrix_main }}
+      matrix_freebsd: ${{ steps.matrix.outputs.matrix_freebsd }}
+      max_parallel_main: ${{ steps.matrix.outputs.max_parallel_main }}
+      max_parallel_freebsd: ${{ steps.matrix.outputs.max_parallel_freebsd }}
+      chunk_size: ${{ steps.matrix.outputs.chunk_size }}
+      total: ${{ steps.matrix.outputs.total }}
+      chunks: ${{ steps.matrix.outputs.chunks }}
+      chunks_linux: ${{ steps.matrix.outputs.chunks_linux }}
+      chunks_windows: ${{ steps.matrix.outputs.chunks_windows }}
+      chunks_macos: ${{ steps.matrix.outputs.chunks_macos }}
+      chunks_freebsd: ${{ steps.matrix.outputs.chunks_freebsd }}
+      min_unique_ips: ${{ steps.matrix.outputs.min_unique_ips }}
+
+    steps:
+      - name: Validate
+        env:
+          INSTALLS: ${{ inputs.installs }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          MIN_UNIQUE_IPS: ${{ inputs.min_unique_ips }}
+        run: |
+          set -euo pipefail
+          INSTALLS=${INSTALLS%.*}
+          CONCURRENCY=${CONCURRENCY%.*}
+          MIN_UNIQUE_IPS=${MIN_UNIQUE_IPS%.*}
+          if [[ "$INSTALLS" -lt 100 || "$INSTALLS" -gt 10000 ]]; then
+            echo "::error title=E::n out of range"
+            exit 1
+          fi
+          if [[ "$CONCURRENCY" -lt 1 || "$CONCURRENCY" -gt 250 ]]; then
+            echo "::error title=E::concurrency must be 1..250 (got $CONCURRENCY)"
+            exit 1
+          fi
+          if [[ "$MIN_UNIQUE_IPS" -lt 1 || "$MIN_UNIQUE_IPS" -gt 250 ]]; then
+            echo "::error title=E::min_unique_ips must be 1..250 (got $MIN_UNIQUE_IPS)"
+            exit 1
+          fi
+          if [[ "$MIN_UNIQUE_IPS" -gt "$CONCURRENCY" ]]; then
+            echo "::error title=E::min_unique_ips ($MIN_UNIQUE_IPS) cannot exceed concurrency ($CONCURRENCY)"
+            exit 1
+          fi
+          if [[ "$MIN_UNIQUE_IPS" -gt "$INSTALLS" ]]; then
+            echo "::error title=E::ip > n"
+            exit 1
+          fi
+          if [[ "$CONCURRENCY" -gt "$INSTALLS" ]]; then
+            echo "::warning title=W::c > n, capping"
+          fi
+
+      - name: Pre
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 3 --retry-delay 2 \
+            "https://pypistats.org/api/packages/${{ secrets.PKG }}/recent" -o pre_recent.json \
+            || echo '{"data":{},"error":"fetch failed"}' > pre_recent.json
+          curl -fsS --retry 3 --retry-delay 2 \
+            "https://pypistats.org/api/packages/${{ secrets.PKG }}/overall" -o pre_overall.json \
+            || echo '{"data":[],"error":"fetch failed"}' > pre_overall.json
+          jq -n \
+            --slurpfile recent pre_recent.json \
+            --slurpfile overall pre_overall.json \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{ts: $ts, recent: $recent[0], overall: $overall[0]}' \
+            > pre_stats.json
+          jq 'walk(if type == "object" then del(.package, .type) else . end)' pre_stats.json > _tmp.json && mv _tmp.json pre_stats.json
+          jq -r '.recent.data | "  last_day=\(.last_day // "?")  last_week=\(.last_week // "?")  last_month=\(.last_month // "?")"' pre_stats.json || true
+
+      #
+      #
+      #
+      #
+      #
+      - name: Plan
+        id: matrix
+        env:
+          INSTALLS: ${{ inputs.installs }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          MIN_UNIQUE_IPS: ${{ inputs.min_unique_ips }}
+          INCLUDE_FREEBSD: ${{ inputs.include_freebsd }}
+        run: |
+          set -euo pipefail
+          INSTALLS=${INSTALLS%.*}
+          CONCURRENCY=${CONCURRENCY%.*}
+          MIN_UNIQUE_IPS=${MIN_UNIQUE_IPS%.*}
+
+          chunks=$(( CONCURRENCY < INSTALLS ? CONCURRENCY : INSTALLS ))
+          chunk_size=$(( (INSTALLS + chunks - 1) / chunks ))
+
+          if [[ "$INCLUDE_FREEBSD" == "true" && $chunks -ge 5 ]]; then
+            fb=$(( chunks * 2 / 100 ))
+            [[ $fb -lt 1 ]] && fb=1
+          else
+            fb=0
+          fi
+
+          rem=$(( chunks - fb ))
+          read -r WIN_PCT LIN_PCT < <(python3 -c "import random; print(f'{random.uniform(15,25):.4f} {random.uniform(35,50):.4f}')")
+          MAC_PCT=$(python3 -c "print(f'{100.0 - $WIN_PCT - $LIN_PCT:.4f}')")
+
+          if [[ $chunks -lt 5 ]]; then
+            lin=$chunks; win=0; mac=0; fb=0
+            rem=$chunks
+            echo "Note: chunks<5 → Linux-only smoke path; rolled percentages ignored."
+          else
+            read -r lin win mac < <(python3 -c "rem=${rem}; lin=int(rem*${LIN_PCT}/100); win=int(rem*${WIN_PCT}/100); mac=rem-lin-win; print(lin, win, mac)")
+            [[ $lin -lt 1 ]] && lin=1 && mac=$(( mac - 1 ))
+            [[ $win -lt 1 ]] && win=1 && mac=$(( mac - 1 ))
+          fi
+
+          matrix_main=$(
+            jq -nc \
+              --argjson lin "$lin" \
+              --argjson win "$win" \
+              --argjson mac "$mac" \
+              '
+              [range(1; $lin + 1)                              | {chunk: ., os: "ubuntu-latest"}]
+              + [range($lin + 1; $lin + $win + 1)              | {chunk: ., os: "windows-latest"}]
+              + [range($lin + $win + 1; $lin + $win + $mac + 1) | {chunk: ., os: "macos-latest"}]
+              '
+          )
+
+          if [[ $fb -gt 0 ]]; then
+            fb_start=$(( lin + win + mac + 1 ))
+            fb_end=$(( fb_start + fb - 1 ))
+            matrix_freebsd=$(
+              jq -nc \
+                --argjson s "$fb_start" \
+                --argjson e "$fb_end" \
+                '{chunk: [range($s; $e + 1)]}'
+            )
+          else
+            matrix_freebsd='{"chunk":[]}'
+          fi
+
+          {
+            echo "matrix_main=$matrix_main"
+            echo "matrix_freebsd=$matrix_freebsd"
+            echo "max_parallel_main=$(( lin + win + mac ))"
+            echo "max_parallel_freebsd=$fb"
+            echo "chunk_size=$chunk_size"
+            echo "total=$INSTALLS"
+            echo "chunks=$chunks"
+            echo "chunks_linux=$lin"
+            echo "chunks_windows=$win"
+            echo "chunks_macos=$mac"
+            echo "chunks_freebsd=$fb"
+            echo "min_unique_ips=$MIN_UNIQUE_IPS"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pre-stats
+          path: pre_stats.json
+          retention-days: 14
+
+  # =============================================================================
+  # =============================================================================
+  install:
+    name: Chunk ${{ matrix.chunk }} (${{ matrix.os }})
+    needs: pre
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJson(needs.pre.outputs.max_parallel_main) }}
+      matrix:
+        include: ${{ fromJson(needs.pre.outputs.matrix_main) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      - name: Execute
+        shell: bash
+        env:
+          CHUNK: ${{ matrix.chunk }}
+          CHUNK_OS: ${{ matrix.os }}
+          CHUNK_SIZE: ${{ needs.pre.outputs.chunk_size }}
+          TOTAL: ${{ needs.pre.outputs.total }}
+          PKG_VERSION: ${{ inputs.version }}
+        run: |
+          set -uo pipefail
+
+          # ─── Cross-platform helpers ──────────────────────────────────────
+          if [[ "${RUNNER_OS:-}" == "macOS" ]]; then
+            if command -v gdate >/dev/null 2>&1; then
+              now_ns() { gdate +%s%N; }
+            else
+              now_ns() { perl -MTime::HiRes -e 'printf "%d", Time::HiRes::time()*1000000000'; }
+            fi
+          else
+            now_ns() { date +%s%N; }
+          fi
+
+          if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+            VENV_PY_REL="Scripts/python.exe"
+          else
+            VENV_PY_REL="bin/python"
+          fi
+          # ─────────────────────────────────────────────────────────────────
+
+          pkg="${{ secrets.PKG }}"
+          if [[ -n "${PKG_VERSION:-}" ]]; then
+            pkg="${{ secrets.PKG }}==${PKG_VERSION}"
+          fi
+
+          ip_log="$RUNNER_TEMP/egress-ip.txt"
+          ip_error=""
+          egress_ip="$(
+            curl -fsS --retry 5 --retry-delay 1 --max-time 10 \
+              https://api.ipify.org > "$ip_log" 2>&1 && cat "$ip_log" || true
+          )"
+          if [[ -z "$egress_ip" ]]; then
+            ip_error="$(tr '\n' ' ' < "$ip_log" | head -c 300)"
+            echo "::warning title=W::${ip_error:-unknown error}"
+          else
+          fi
+
+          start_idx=$(( (CHUNK - 1) * CHUNK_SIZE ))
+          end_idx=$(( CHUNK * CHUNK_SIZE ))
+          if [[ $end_idx -gt $TOTAL ]]; then end_idx=$TOTAL; fi
+          count=$(( end_idx - start_idx ))
+
+          if [[ $count -le 0 ]]; then
+            echo "Chunk ${CHUNK} is empty (start=$start_idx, end=$end_idx, total=$TOTAL); skipping."
+            jq -nc --argjson chunk "$CHUNK" \
+              --arg os "$CHUNK_OS" \
+              --arg ip "$egress_ip" \
+              --arg ip_error "$ip_error" \
+              '{chunk: $chunk, os: $os, egress_ip: $ip, ip_lookup_error: $ip_error, success: 0, failure: 0, wall_ms: 0, durations_ms: [], errors: ""}' \
+              > "result-${CHUNK}.json"
+            exit 0
+          fi
+
+
+          success=0
+          failure=0
+          durations=()
+          errors=""
+          chunk_t0=$(now_ns)
+
+          for (( i=0; i<count; i++ )); do
+            idx=$(( start_idx + i ))
+            venv="$RUNNER_TEMP/venv-$idx"
+            log="$RUNNER_TEMP/log-$idx.txt"
+
+            uv venv --quiet --python 3.12 "$venv"
+
+            t0=$(now_ns)
+            if uv pip install \
+                --python "$venv/$VENV_PY_REL" \
+                --no-cache \
+                --no-deps \
+                --quiet \
+                "$pkg" > "$log" 2>&1; then
+              t1=$(now_ns)
+              durations+=( $(( (t1 - t0) / 1000000 )) )
+              success=$(( success + 1 ))
+            else
+              err=$(tail -c 200 "$log" | tr '\n' ' ' | tr -d '"')
+              errors="${errors}idx=${idx}: ${err}"$'\n'
+              failure=$(( failure + 1 ))
+            fi
+
+            rm -rf "$venv" "$log"
+          done
+
+          chunk_t1=$(now_ns)
+          chunk_wall_ms=$(( (chunk_t1 - chunk_t0) / 1000000 ))
+
+          if [[ ${#durations[@]} -eq 0 ]]; then
+            durations_json="[]"
+          else
+            durations_json="[$(IFS=,; echo "${durations[*]}")]"
+          fi
+
+          jq -nc \
+            --argjson chunk "$CHUNK" \
+            --arg os "$CHUNK_OS" \
+            --arg ip "$egress_ip" \
+            --arg ip_error "$ip_error" \
+            --argjson success "$success" \
+            --argjson failure "$failure" \
+            --argjson wall "$chunk_wall_ms" \
+            --argjson durations "$durations_json" \
+            --arg errors "$(printf '%s' "$errors" | head -c 2000)" \
+            '{chunk: $chunk, os: $os, egress_ip: $ip, ip_lookup_error: $ip_error, success: $success, failure: $failure, wall_ms: $wall, durations_ms: $durations, errors: $errors}' \
+            > "result-${CHUNK}.json"
+
+          echo "Chunk ${CHUNK} (${CHUNK_OS}) done: success=$success failure=$failure wall=${chunk_wall_ms}ms"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install-result-${{ matrix.chunk }}
+          path: result-${{ matrix.chunk }}.json
+          retention-days: 14
+
+  # =============================================================================
+  # =============================================================================
+  #
+  install_freebsd:
+    name: Chunk ${{ matrix.chunk }} (freebsd)
+    needs: pre
+    if: ${{ needs.pre.outputs.chunks_freebsd != '0' }}
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJson(needs.pre.outputs.max_parallel_freebsd) }}
+      matrix: ${{ fromJson(needs.pre.outputs.matrix_freebsd) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # +15 over main matrix to absorb VM-boot overhead.
+
+    steps:
+      - name: Execute in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        env:
+          CHUNK: ${{ matrix.chunk }}
+          CHUNK_SIZE: ${{ needs.pre.outputs.chunk_size }}
+          TOTAL: ${{ needs.pre.outputs.total }}
+          PKG_VERSION: ${{ inputs.version }}
+        with:
+          envs: "CHUNK CHUNK_SIZE TOTAL PKG_VERSION GITHUB_WORKSPACE"
+          usesh: true
+          prepare: |
+            pkg install -y curl jq python311
+          run: |
+            set -uo pipefail
+            pkg_name="${{ secrets.PKG }}"
+            if [ -n "${PKG_VERSION:-}" ]; then
+              pkg_name="${{ secrets.PKG }}==${PKG_VERSION}"
+            fi
+
+            ip_log=/tmp/egress-ip.txt
+            ip_error=""
+            egress_ip="$(
+              curl -fsS --retry 5 --retry-delay 1 --max-time 10 \
+                https://api.ipify.org > "$ip_log" 2>&1 && cat "$ip_log" || true
+            )"
+            if [ -z "$egress_ip" ]; then
+              ip_error="$(tr '\n' ' ' < "$ip_log" | head -c 300)"
+              echo "::warning title=W::${ip_error:-unknown error}"
+            else
+            fi
+
+            start_idx=$(( (CHUNK - 1) * CHUNK_SIZE ))
+            end_idx=$(( CHUNK * CHUNK_SIZE ))
+            if [ $end_idx -gt $TOTAL ]; then end_idx=$TOTAL; fi
+            count=$(( end_idx - start_idx ))
+
+            if [ $count -le 0 ]; then
+              echo "FreeBSD chunk ${CHUNK} empty; skipping."
+              jq -nc --argjson chunk "$CHUNK" \
+                --arg ip "$egress_ip" \
+                --arg ip_error "$ip_error" \
+                '{chunk: $chunk, os: "freebsd", egress_ip: $ip, ip_lookup_error: $ip_error, success: 0, failure: 0, wall_ms: 0, durations_ms: [], errors: ""}' \
+                > "/tmp/result-${CHUNK}.json"
+              exit 0
+            fi
+
+
+            success=0
+            failure=0
+            durations=""
+            errors=""
+            chunk_t0=$(date +%s%N)
+
+            i=0
+            while [ $i -lt $count ]; do
+              idx=$(( start_idx + i ))
+              venv=/tmp/venv-$idx
+              log=/tmp/log-$idx.txt
+
+              python3.11 -m venv "$venv" >/dev/null 2>&1
+
+              t0=$(date +%s%N)
+              if "$venv/bin/pip" install \
+                  --no-cache-dir --no-deps --quiet "$pkg_name" > "$log" 2>&1; then
+                t1=$(date +%s%N)
+                d=$(( (t1 - t0) / 1000000 ))
+                if [ -z "$durations" ]; then durations="$d"; else durations="$durations,$d"; fi
+                success=$(( success + 1 ))
+              else
+                err=$(tail -c 200 "$log" | tr '\n' ' ' | tr -d '"')
+                errors="${errors}$(printf 'idx=%s: %s\n' "$idx" "$err")"
+                failure=$(( failure + 1 ))
+              fi
+
+              rm -rf "$venv" "$log"
+              i=$(( i + 1 ))
+            done
+
+            chunk_t1=$(date +%s%N)
+            chunk_wall_ms=$(( (chunk_t1 - chunk_t0) / 1000000 ))
+
+            if [ -z "$durations" ]; then
+              durations_json="[]"
+            else
+              durations_json="[$durations]"
+            fi
+
+            jq -nc \
+              --argjson chunk "$CHUNK" \
+              --arg ip "$egress_ip" \
+              --arg ip_error "$ip_error" \
+              --argjson success "$success" \
+              --argjson failure "$failure" \
+              --argjson wall "$chunk_wall_ms" \
+              --argjson durations "$durations_json" \
+              --arg errors "$(printf '%s' "$errors" | head -c 2000)" \
+              '{chunk: $chunk, os: "freebsd", egress_ip: $ip, ip_lookup_error: $ip_error, success: $success, failure: $failure, wall_ms: $wall, durations_ms: $durations, errors: $errors}' \
+              > "${GITHUB_WORKSPACE}/result-${CHUNK}.json"
+
+            echo "FreeBSD chunk ${CHUNK} done: success=$success failure=$failure wall=${chunk_wall_ms}ms"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install-result-${{ matrix.chunk }}
+          path: result-${{ matrix.chunk }}.json
+          retention-days: 14
+
+  # =============================================================================
+  # =============================================================================
+  aggregate:
+    name: Aggregate
+    needs: [pre, install, install_freebsd]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            dev/tools
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Collect
+        uses: actions/download-artifact@v4
+        with:
+          path: results
+          pattern: install-result-*
+          merge-multiple: true
+
+      - name: Collect pre
+        uses: actions/download-artifact@v4
+        with:
+          name: pre-stats
+          path: .
+
+      - name: Post
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 3 --retry-delay 2 \
+            "https://pypistats.org/api/packages/${{ secrets.PKG }}/recent" -o post_recent.json \
+            || echo '{"data":{},"error":"fetch failed"}' > post_recent.json
+          curl -fsS --retry 3 --retry-delay 2 \
+            "https://pypistats.org/api/packages/${{ secrets.PKG }}/overall" -o post_overall.json \
+            || echo '{"data":[],"error":"fetch failed"}' > post_overall.json
+          jq -n \
+            --slurpfile recent post_recent.json \
+            --slurpfile overall post_overall.json \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{ts: $ts, recent: $recent[0], overall: $overall[0]}' \
+            > post_stats.json
+          jq 'walk(if type == "object" then del(.package, .type) else . end)' post_stats.json > _tmp.json && mv _tmp.json post_stats.json
+
+      - name: Report
+        env:
+          INSTALLS: ${{ needs.pre.outputs.total }}
+          CONCURRENCY: ${{ needs.pre.outputs.chunks }}
+          MIN_UNIQUE_IPS: ${{ needs.pre.outputs.min_unique_ips }}
+          PKG_VERSION: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python dev/tools/pypi_load_test.py report \
+            --results results \
+            --pre pre_stats.json \
+            --post post_stats.json \
+            --installs "$INSTALLS" \
+            --concurrency "$CONCURRENCY" \
+            --min-unique-ips "$MIN_UNIQUE_IPS" \
+            --version "${PKG_VERSION:-latest}" \
+            --run-url "$RUN_URL" \
+            --md report.md \
+            --json report.json
+
+      - name: Summary
+        run: cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: |
+            report.md
+            report.json
+            pre_stats.json
+            post_stats.json
+          retention-days: 30
+
+      - name: Verify
+        env:
+          MIN_UNIQUE_IPS: ${{ needs.pre.outputs.min_unique_ips }}
+        run: |
+          set -euo pipefail
+          unique_ips="$(jq -r '.metrics.unique_egress_ips // 0' report.json)"
+          observed_ips="$(jq -r '.metrics.egress_ips_observed // 0' report.json)"
+          echo "Observed $unique_ips unique egress IP(s) across $observed_ips runner chunk(s)."
+          if [[ "$unique_ips" -lt "$MIN_UNIQUE_IPS" ]]; then
+            echo "::error title=E::Expected at least $MIN_UNIQUE_IPS unique egress IPs, observed $unique_ips"
+            exit 1
+          fi
+
+# =============================================================================
+# =============================================================================
+#
+#
+#

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Test / build
+.pytest_cache/
+plan.json
+cell-*.json
+
+# OS
+.DS_Store

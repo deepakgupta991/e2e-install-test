@@ -1,0 +1,170 @@
+{
+ "info": {
+  "name": "testpkg",
+  "requires_python": ">=3.12",
+  "version": "3.19.0"
+ },
+ "releases": {
+  "3.16.0": [],
+  "3.17.2": [
+   {
+    "digests": {
+     "sha256": "74cd7c6c2e8ec34381b810f39cd1c7dd14c856fb20ab4664b72a6b2da79bf9c6"
+    },
+    "filename": "testpkg-3.17.2.tar.gz",
+    "packagetype": "sdist",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.17.2.tar.gz",
+    "yanked": false
+   },
+   {
+    "digests": {
+     "sha256": "5717d69b6a8655d4f2678bbaa766c4365e6d9579abfa47bfe3da0aea5169a618"
+    },
+    "filename": "testpkg-3.17.2-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.17.2-py3-none-any.whl",
+    "yanked": false
+   }
+  ],
+  "3.18.0": [
+   {
+    "digests": {
+     "sha256": "0860c1703ab4842ff0680dde51337c8cad1caa0357105ddd8794f0e2f4281c9d"
+    },
+    "filename": "testpkg-3.18.0.tar.gz",
+    "packagetype": "sdist",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.18.0.tar.gz",
+    "yanked": false
+   },
+   {
+    "digests": {
+     "sha256": "e17e32996f4381a8599dddbc7b3e5b429c96bbb15d4ae979ecdda4bbb7680ca2"
+    },
+    "filename": "testpkg-3.18.0-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.18.0-py3-none-any.whl",
+    "yanked": false
+   }
+  ],
+  "3.18.1": [
+   {
+    "digests": {
+     "sha256": "35eb5df192df40d11d60388395e4e9ffd7dd4daee3b713fb2561ba1d008481d7"
+    },
+    "filename": "testpkg-3.18.1.tar.gz",
+    "packagetype": "sdist",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.18.1.tar.gz",
+    "yanked": false
+   },
+   {
+    "digests": {
+     "sha256": "314f3b6dfefc68887601eaee2edbde7c3512f99199420eaccfd97b3e792b6af7"
+    },
+    "filename": "testpkg-3.18.1-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.18.1-py3-none-any.whl",
+    "yanked": false
+   }
+  ],
+  "3.18.2": [
+   {
+    "digests": {
+     "sha256": "ea0b2888a24e987bebab69c9e16d660ee7bef072eca0f942ecb4ab2bc1994b63"
+    },
+    "filename": "testpkg-3.18.2.tar.gz",
+    "packagetype": "sdist",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.18.2.tar.gz",
+    "yanked": false
+   },
+   {
+    "digests": {
+     "sha256": "f9515c94cee8f06bb86d82d7a9b8f9b880e5cd842d89fb71e8012059755faaa9"
+    },
+    "filename": "testpkg-3.18.2-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.18.2-py3-none-any.whl",
+    "yanked": false
+   }
+  ],
+  "3.19.0": [
+   {
+    "digests": {
+     "sha256": "95fab34cd3d5c9657d1c4bfcaa416d06f5e6fb298200358123e87d16a717dd18"
+    },
+    "filename": "testpkg-3.19.0.tar.gz",
+    "packagetype": "sdist",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.19.0.tar.gz",
+    "yanked": false
+   },
+   {
+    "digests": {
+     "sha256": "b8407b0b98eb608e46a95c653049c787d372e0966eeefa2d4fa9783bc0e7090f"
+    },
+    "filename": "testpkg-3.19.0-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.19.0-py3-none-any.whl",
+    "yanked": false
+   }
+  ],
+  "3.19.0rc1": [
+   {
+    "digests": {
+     "sha256": "00cee9ec15ce77d44f13578b1c6d3840b4cf3cbb9d55c6861055137aed119639"
+    },
+    "filename": "testpkg-3.19.0rc1.tar.gz",
+    "packagetype": "sdist",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.19.0rc1.tar.gz",
+    "yanked": false
+   },
+   {
+    "digests": {
+     "sha256": "4542f7f7769e97c6f24fde5fa047f25424466bdeccc4105ec9cd84f7539f99a0"
+    },
+    "filename": "testpkg-3.19.0rc1-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.19.0rc1-py3-none-any.whl",
+    "yanked": false
+   }
+  ],
+  "3.20.0.dev1": [
+   {
+    "digests": {
+     "sha256": "1cb3da85cf5c4c2f678f79bec83233c75b686b244d1e60865c20cea7064044e5"
+    },
+    "filename": "testpkg-3.20.0.dev1.tar.gz",
+    "packagetype": "sdist",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.20.0.dev1.tar.gz",
+    "yanked": false
+   },
+   {
+    "digests": {
+     "sha256": "c7458553bc547655d19aea5fb8614bd5725ba5c1ab73eaf2f1b19e45b8675a9e"
+    },
+    "filename": "testpkg-3.20.0.dev1-py3-none-any.whl",
+    "packagetype": "bdist_wheel",
+    "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.20.0.dev1-py3-none-any.whl",
+    "yanked": false
+   }
+  ]
+ },
+ "urls": [
+  {
+   "digests": {
+    "sha256": "95fab34cd3d5c9657d1c4bfcaa416d06f5e6fb298200358123e87d16a717dd18"
+   },
+   "filename": "testpkg-3.19.0.tar.gz",
+   "packagetype": "sdist",
+   "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.19.0.tar.gz",
+   "yanked": false
+  },
+  {
+   "digests": {
+    "sha256": "b8407b0b98eb608e46a95c653049c787d372e0966eeefa2d4fa9783bc0e7090f"
+   },
+   "filename": "testpkg-3.19.0-py3-none-any.whl",
+   "packagetype": "bdist_wheel",
+   "url": "https://files.pythonhosted.org/packages/xx/testpkg-3.19.0-py3-none-any.whl",
+   "yanked": false
+  }
+ ]
+}
